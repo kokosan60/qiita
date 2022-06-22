@@ -46,6 +46,8 @@ GASは始めたばかりなので、コード見ずらい部分あるかと思�
 　　　　　　　 それに伴い、スプレットシートIDの記述削除 */
 /* 2022-05-03 著作者情報がない書籍の場合エラーになっていたのを修正 */
 /* 2022-05-03 漫画において巻数が表示されなかったため表示されるよう変更(OpenBDのみ対応) */
+/* 2022-06-10 最終の画像としてAmazonを採用、OpenBD以外でCreateAtが正しく表示されないバグ修正、
+　　　　　　　 古い書籍でISBNが10桁のものしかない場合にも対応*/
 
 const rakuten_appid= /*楽天のアプリIDを記載*/
 
@@ -84,6 +86,22 @@ function getNowDate(){
   return Utilities.formatDate(d, "Asia/Tokyo", "yyyy/MM/dd HH:mm:ss");
 }
 
+const toISBN10 = (isbn13) => {
+  // 1. 先頭３文字と末尾１文字を除く
+  const src = isbn13.toString().slice(3, 12);
+
+  // 2. 先頭の桁から順に10、9、8…2を掛けて合計する
+  const sum = src.split('').map(s => parseInt(s))
+    .reduce((p, c, i) => (i === 1 ? p * 10 : p) + c * (10 - i));
+
+  // 3. 合計を11で割った余りを11から引く（※引き算の結果が11の場合は0、10の時はアルファベットのXにする）
+  const rem = 11 - sum % 11;
+  const checkdigit = rem === 11 ? 0 : (rem === 10 ? 'X' : rem);
+
+  // 1.の末尾に3.の値を添えて出来上がり
+  return `${src}${checkdigit}`;
+}
+
 function onChangeSheet(e) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
   sheet.getDataRange().getValues().forEach((row, i) => {
@@ -104,26 +122,44 @@ function onChangeSheet(e) {
       sheet.getRange(lrow,2).activate();
       return;
     }
+    var now = getNowDate();
     //OpenBD
     let bookinfo_openbd = fetchBookSummary_openbd(isbn);
     if(bookinfo_openbd){
       let bookinfo_openbd_sm = bookinfo_openbd.summary;
-      var now = getNowDate();
+
       let bookinfo_openbd_sb=bookinfo_openbd.onix.DescriptiveDetail.TitleDetail.TitleElement["PartNumber"];
       if(bookinfo_openbd_sb){
         bookinfo_openbd_sm.title = bookinfo_openbd_sm.title + " " + bookinfo_openbd_sb;
       }
-      if(bookinfo_openbd_sm && bookinfo_openbd_sm.author){
-        if(bookinfo_openbd_sm.cover){
-          sheet.getRange(i + 1, 1, 1, row.length).setValues([[i, isbn, bookinfo_openbd_sm.title, bookinfo_openbd_sm.publisher, getDate(bookinfo_openbd_sm.pubdate), bookinfo_openbd_sm.cover, bookinfo_openbd_sm.author, now]]);
-        }else{
-          //画像なかったらGoogleの画像を取得
-          let bookinfo_google=fetchBookSummary_google(isbn);
-          if(bookinfo_google["volumeInfo"]["imageLinks"]){
-            sheet.getRange(i + 1, 1, 1, row.length).setValues([[i, isbn, bookinfo_openbd_sm.title, bookinfo_openbd_sm.publisher, getDate(bookinfo_openbd_sm.pubdate), bookinfo_google["volumeInfo"]["imageLinks"].thumbnail, bookinfo_openbd_sm.author, now]]);
+      if(bookinfo_openbd_sm ){
+        //著者がいる場合
+        if(bookinfo_openbd_sm.author){
+          if(bookinfo_openbd_sm.cover){
+            sheet.getRange(i + 1, 1, 1, row.length).setValues([[i, isbn, bookinfo_openbd_sm.title, bookinfo_openbd_sm.publisher, getDate(bookinfo_openbd_sm.pubdate), bookinfo_openbd_sm.cover, bookinfo_openbd_sm.author, now]]);
           }else{
-            //Googleにも画像がない
-            sheet.getRange(i + 1, 1, 1, row.length).setValues([[i, isbn, bookinfo_openbd_sm.title, bookinfo_openbd_sm.publisher, getDate(bookinfo_openbd_sm.pubdate), "", bookinfo_openbd_sm.author, now]]);
+            //画像なかったらGoogleの画像を取得
+            let bookinfo_google=fetchBookSummary_google(isbn);
+            if(bookinfo_google["volumeInfo"]["imageLinks"]){
+              sheet.getRange(i + 1, 1, 1, row.length).setValues([[i, isbn, bookinfo_openbd_sm.title, bookinfo_openbd_sm.publisher, getDate(bookinfo_openbd_sm.pubdate), bookinfo_google["volumeInfo"]["imageLinks"].thumbnail, bookinfo_openbd_sm.author, now]]);
+            }else{
+              //Googleにも画像がない
+              sheet.getRange(i + 1, 1, 1, row.length).setValues([[i, isbn, bookinfo_openbd_sm.title, bookinfo_openbd_sm.publisher, getDate(bookinfo_openbd_sm.pubdate), "https://images-na.ssl-images-amazon.com/images/P/"+toISBN10(isbn)+".09.LZZZZZZZ.jpg", bookinfo_openbd_sm.author, now]]);
+            }
+          }
+        }else{
+          //著者がいない
+          let bookinfo_google=fetchBookSummary_google(isbn);
+          if(bookinfo_openbd_sm.cover){
+            sheet.getRange(i + 1, 1, 1, row.length).setValues([[i, isbn, bookinfo_openbd_sm.title, bookinfo_openbd_sm.publisher, getDate(bookinfo_openbd_sm.pubdate), bookinfo_openbd_sm.cover, bookinfo_google["volumeInfo"]["authors"].join(","), now]]);
+          }else{
+
+            if(bookinfo_google["volumeInfo"]["imageLinks"]){
+              sheet.getRange(i + 1, 1, 1, row.length).setValues([[i, isbn, bookinfo_openbd_sm.title, bookinfo_openbd_sm.publisher, getDate(bookinfo_openbd_sm.pubdate), bookinfo_google["volumeInfo"]["imageLinks"].thumbnail, bookinfo_google["volumeInfo"]["authors"].join(","), now]]);
+            }else{
+              //Googleにも画像がない
+              sheet.getRange(i + 1, 1, 1, row.length).setValues([[i, isbn, bookinfo_openbd_sm.title, bookinfo_openbd_sm.publisher, getDate(bookinfo_openbd_sm.pubdate), "https://images-na.ssl-images-amazon.com/images/P/"+toISBN10(isbn)+".09.LZZZZZZZ.jpg", bookinfo_google["volumeInfo"]["authors"].join(","), now]]);
+            }
           }
         }
       }
@@ -133,16 +169,21 @@ function onChangeSheet(e) {
       if(bookinfo_rakuten){
         bookinfo_rakuten = bookinfo_rakuten["Item"];
         let bookinfo_google=fetchBookSummary_google(isbn);
+        let publishedDate
+        if(bookinfo_google){
+           publishedDate=bookinfo_google["volumeInfo"].publishedDate
+        }else{
+           publishedDate=bookinfo_rakuten.salesDate
+        }
         if(bookinfo_rakuten.largeImageUrl){
-          sheet.getRange(i + 1, 1, 1, row.length).setValues([[i, isbn, bookinfo_rakuten.title, bookinfo_rakuten.publisherName, bookinfo_google["volumeInfo"].publishedDate, bookinfo_rakuten.largeImageUrl, bookinfo_rakuten.author, now]]);
+          sheet.getRange(i + 1, 1, 1, row.length).setValues([[i, isbn, bookinfo_rakuten.title, bookinfo_rakuten.publisherName, publishedDate, bookinfo_rakuten.largeImageUrl, bookinfo_rakuten.author, now]]);
         }else{
           //画像なかったらGoogleの画像を取得
-          let bookinfo_google=fetchBookSummary_google(isbn);
           if(bookinfo_google["volumeInfo"]["imageLinks"]){
-          sheet.getRange(i + 1, 1, 1, row.length).setValues([[i, isbn, bookinfo_rakuten.title, bookinfo_rakuten.publisherName, bookinfo_google["volumeInfo"].publishedDate, bookinfo_google["volumeInfo"]["imageLinks"].thumbnail, bookinfo_rakuten.author, now]]);
+          sheet.getRange(i + 1, 1, 1, row.length).setValues([[i, isbn, bookinfo_rakuten.title, bookinfo_rakuten.publisherName, publishedDate, bookinfo_google["volumeInfo"]["imageLinks"].thumbnail, bookinfo_rakuten.author, now]]);
           }else{
             //Googleにも画像がない
-            sheet.getRange(i + 1, 1, 1, row.length).setValues([[i, isbn, bookinfo_rakuten.title, bookinfo_rakuten.publisherName, bookinfo_google["volumeInfo"].publishedDate, "", bookinfo_rakuten.author, now]]);
+            sheet.getRange(i + 1, 1, 1, row.length).setValues([[i, isbn, bookinfo_rakuten.title, bookinfo_rakuten.publisherName, publishedDate, "https://images-na.ssl-images-amazon.com/images/P/"+toISBN10(isbn)+".09.LZZZZZZZ.jpg", bookinfo_rakuten.author, now]]);
           }
         }
       }else{
@@ -153,7 +194,7 @@ function onChangeSheet(e) {
             sheet.getRange(i + 1, 1, 1, row.length).setValues([[i, isbn, bookinfo_google["volumeInfo"].title, (bookinfo_google["volumeInfo"].publisher)?bookinfo_google["volumeInfo"].publisher:"", bookinfo_google["volumeInfo"].publishedDate, bookinfo_google["volumeInfo"]["imageLinks"].thumbnail,  bookinfo_google["volumeInfo"]["authors"].join(","), now]]);
           }else{
             //Googleにも画像がない
-            sheet.getRange(i + 1, 1, 1, row.length).setValues([[i, isbn, bookinfo_google["volumeInfo"].title, (bookinfo_google["volumeInfo"].publisher)?bookinfo_google["volumeInfo"].publisher:"", bookinfo_google["volumeInfo"].publishedDate, "",  bookinfo_google["volumeInfo"]["authors"].join(","), now]]);
+            sheet.getRange(i + 1, 1, 1, row.length).setValues([[i, isbn, bookinfo_google["volumeInfo"].title, (bookinfo_google["volumeInfo"].publisher)?bookinfo_google["volumeInfo"].publisher:"", bookinfo_google["volumeInfo"].publishedDate, "https://images-na.ssl-images-amazon.com/images/P/"+toISBN10(isbn)+".09.LZZZZZZZ.jpg",  bookinfo_google["volumeInfo"]["authors"].join(","), now]]);
           }
         }else{
           //どこもヒットしない
@@ -185,3 +226,15 @@ Amazonの商品ページに載っている画像のアドレスを、
 アプリ側にも画像が表示されるようになります。
 ※AmazonのAPIは色々と制約があるようなので、
  今回は採用見送っています。
+
+# 追記(2022/6/10)
+AmazonのAPIは制約があり採用を見送っていたのですが、
+なんと、[画像だけであればISBNさえわかってしまえば取得可能](https://qiita.com/nyoroko/items/452a8db449862f31ab2b)
+ということがわかりましたので、画像が見つからない場合、
+最終的にAmazonを参照するようにしました。
+なお、上記リンクにありますように、
+Amazonを利用する際のISBNは10桁でなければならないので、
+[こちら](https://qiita.com/iz-j/items/edbdf29065777f9518af)を流用させていただき、
+ISBNの変換を行っています。
+また、古い書籍の場合、ISBNが10桁のものしか記載がない場合がありますので、
+それに対応するために、[逆バージョンの10桁→13桁](https://qiita.com/iz-j/items/27b9656ebed1a4516ee1)を流用しています。
